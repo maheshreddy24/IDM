@@ -1,0 +1,50 @@
+# IDM + flow-matching world model on the toy uniform-motion videos (single GPU).
+# Run: python train.py configs/training_toy_data.yaml
+
+data:
+  path: datasets/uniform_motion_30K.hdf5   # 30 shards x 1000 clips, 32 frames of 256x256 at 10 fps
+  frame_gap: 4             # x_n is frame_gap frames after x_{n-1} (0.4 s; the ball moves ~1 patch)
+  image_size: 256          # 256 / 16 -> 16 x 16 DINOv3 patch grid
+  val_clips: 1000          # last clips of the file are held out for evaluation
+  num_workers: 8
+
+backbone:
+  name: facebook/dinov3-vitl16-pretrain-lvd1689m   # gated on Hugging Face: accept the license, then `huggingface-cli login`
+  layers: [6, 12, 18, 24]  # averaged after DINOv3's final norm (Flow-World-Models' recipe)
+
+idm:
+  emb_dim: 768             # LaWAM's base config: dim 768, 12 layers, 12 heads, ffn x3
+  num_layers: 12
+  num_heads: 12
+  ffn_ratio: 3
+  num_queries: 1
+  latent_dim: 256          # latent action size; matches the world model's conditioning width (hidden_size[0])
+  kl_weight: 5.0e-5        # VAE bottleneck weight (LaWAM)
+
+world_model:
+  hidden_size: [256, 1024] # encoder stage / wide DDT head (Flow-World-Models base)
+  depth: [2, 2]
+  num_heads: [8, 16]
+  mlp_ratio: 4.0
+
+flow:
+  time_shift: 3.0          # Flow-World-Models' time_dist_shift (13 there for a ~18x larger target); sweep {2, 3, 6, 13}
+  sample_steps: 50         # Euler steps at evaluation
+
+train:
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 2000
+  max_steps: 50000
+  grad_clip: 1.0
+  stats_batches: 50        # batches used to estimate the feature mean / std
+  seed: 0
+
+log:
+  out_dir: runs/toy
+  log_every: 100
+  eval_every: 2500
+  eval_batches: 10
+  save_every: 5000
+  resume: null             # path to a checkpoint, e.g. runs/toy/last.pt
