@@ -1,0 +1,7 @@
+# Install torch first with the CUDA build for your machine (setup.sh uses cu126), then: pip install -r requirements.txt
+torch>=2.4
+transformers>=4.56   # first release with DINOv3
+numpy
+h5py
+decord               # decodes the mp4 clips stored in the HDF5 file
+pyyaml
