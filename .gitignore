@@ -3,3 +3,7 @@
 /datasets
 /runs
 __pycache__/
+
+*.hdf5
+*.jsonl
+/ssv2

@@ -1,4 +1,4 @@
-""" Joint training of the IDM and the flow-matching world model on frozen DINOv3 features (single GPU).
+""" Joint training of the IDM and the flow-matching world model on frozen DINOv2 features (single GPU).
 
     python train.py configs/training_toy_data.yaml
 """
@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader
 
-from src.data import UniformMotionDataset, list_clips
+from src.data import VideoPairDataset, list_clips
 from src.idm import IDM
 from src.model import LatentActionWorldModel
 from src.transformer_block import Encoder
@@ -22,10 +22,10 @@ from src.world_model import WorldModel
 
 @torch.no_grad()
 def encode_pairs(encoder, images):
-    """ images: bs, 2, 3, H, W -> bs, 2, N, C float32 backbone features """
+    """ images: bs, T, 3, H, W -> bs, T, N, C float32 backbone features (T = 2 for a pair) """
     with torch.autocast('cuda', dtype=torch.bfloat16):
         feats = encoder(images.flatten(0, 1))  # 2 bs, N, C
-    return feats.float().unflatten(0, (images.shape[0], 2))
+    return feats.float().unflatten(0, images.shape[:2])
 
 
 @torch.no_grad()
@@ -84,6 +84,20 @@ def lr_at(step, cfg):
     return cfg['lr'] * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
 
 
+def build_models(cfg):
+    """ -> frozen encoder, LatentActionWorldModel (both on CPU) """
+    encoder = Encoder(cfg['backbone']['name'], layers=tuple(cfg['backbone']['layers']))
+    grid = (cfg['data']['image_size'] // encoder.patch_size,) * 2
+    idm_cfg, wm_cfg = cfg['idm'], cfg['world_model']
+    idm = IDM(input_dim=encoder.dim, emb_dim=idm_cfg['emb_dim'], num_layers=idm_cfg['num_layers'],
+              num_heads=idm_cfg['num_heads'], ffn_ratio=idm_cfg['ffn_ratio'], latent_dim=idm_cfg['latent_dim'],
+              grid_size=grid, num_queries=idm_cfg['num_queries'], action_dim=idm_cfg.get('action_dim'))
+    wm = WorldModel(in_dim=encoder.dim, action_dim=idm_cfg['latent_dim'], grid_size=grid,
+                    hidden_size=tuple(wm_cfg['hidden_size']), depth=tuple(wm_cfg['depth']),
+                    num_heads=tuple(wm_cfg['num_heads']), mlp_ratio=wm_cfg['mlp_ratio'])
+    return encoder, LatentActionWorldModel(idm, wm, time_shift=cfg['flow']['time_shift'], kl_weight=idm_cfg['kl_weight'])
+
+
 def main():
     with open(sys.argv[1] if len(sys.argv) > 1 else 'configs/training_toy_data.yaml') as f:
         cfg = yaml.safe_load(f)
@@ -98,26 +112,19 @@ def main():
     # ---- data ----
     clips = list_clips(data_cfg['path'])
     train_clips, val_clips = clips[:-data_cfg['val_clips']], clips[-data_cfg['val_clips']:]
-    train_set = UniformMotionDataset(data_cfg['path'], train_clips, data_cfg['frame_gap'], data_cfg['image_size'])
-    val_set = UniformMotionDataset(data_cfg['path'], val_clips, data_cfg['frame_gap'], data_cfg['image_size'], random_start=False)
+    train_set = VideoPairDataset(data_cfg['path'], train_clips, data_cfg['frame_gap'], data_cfg['image_size'])
+    val_set = VideoPairDataset(data_cfg['path'], val_clips, data_cfg['frame_gap'], data_cfg['image_size'], random_start=False)
     train_loader = DataLoader(train_set, batch_size=train_cfg['batch_size'], shuffle=True, drop_last=True,
                               num_workers=data_cfg['num_workers'], pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(val_set, batch_size=train_cfg['batch_size'], num_workers=data_cfg['num_workers'])
     print(f"clips: {len(train_set)} train / {len(val_set)} val")
 
     # ---- models ----
-    encoder = Encoder(cfg['backbone']['name'], layers=tuple(cfg['backbone']['layers'])).cuda()
-    grid = (data_cfg['image_size'] // encoder.patch_size,) * 2
-    idm_cfg, wm_cfg = cfg['idm'], cfg['world_model']
-    idm = IDM(input_dim=encoder.dim, emb_dim=idm_cfg['emb_dim'], num_layers=idm_cfg['num_layers'],
-              num_heads=idm_cfg['num_heads'], ffn_ratio=idm_cfg['ffn_ratio'], latent_dim=idm_cfg['latent_dim'],
-              grid_size=grid, num_queries=idm_cfg['num_queries'])
-    wm = WorldModel(in_dim=encoder.dim, action_dim=idm_cfg['latent_dim'], grid_size=grid,
-                    hidden_size=tuple(wm_cfg['hidden_size']), depth=tuple(wm_cfg['depth']),
-                    num_heads=tuple(wm_cfg['num_heads']), mlp_ratio=wm_cfg['mlp_ratio'])
-    model = LatentActionWorldModel(idm, wm, time_shift=cfg['flow']['time_shift'], kl_weight=idm_cfg['kl_weight']).cuda()
-    print(f"params: IDM {sum(p.numel() for p in idm.parameters()) / 1e6:.1f}M | "
-          f"world model {sum(p.numel() for p in wm.parameters()) / 1e6:.1f}M | features {grid} x {encoder.dim}")
+    encoder, model = build_models(cfg)
+    encoder, model = encoder.cuda(), model.cuda()
+    print(f"params: IDM {sum(p.numel() for p in model.idm.parameters()) / 1e6:.1f}M | "
+          f"world model {sum(p.numel() for p in model.world_model.parameters()) / 1e6:.1f}M | "
+          f"features {model.world_model.pos_x_target.shape[0]} tokens x {encoder.dim}")
 
     # no weight decay on biases, norms and other 1-D parameters
     params = [p for p in model.parameters() if p.requires_grad]

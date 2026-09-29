@@ -76,17 +76,18 @@ class Transformer(nn.Module):
 
 
 class Encoder(nn.Module):
-    """ Frozen DINOv3 backbone. Expects ImageNet-normalised images.
+    """ Frozen DINOv2 / DINOv3 backbone. Expects ImageNet-normalised images.
 
-    Features follow Flow-World-Models: the outputs of `layers` each go through DINOv3's final norm and are
+    Features follow Flow-World-Models: the outputs of `layers` each go through the backbone's final norm and are
     averaged (they use layers 3, 6, 9, 12 of the 12-layer ViT-S; the default is the same spacing over the
     24-layer ViT-L). Pass a single layer, e.g. layers=(24,), to use one layer only """
-    def __init__(self, model_name='facebook/dinov3-vitl16-pretrain-lvd1689m', layers=(6, 12, 18, 24)):
+    def __init__(self, model_name='facebook/dinov2-large', layers=(6, 12, 18, 24)):
         super().__init__()
         self.model = AutoModel.from_pretrained(model_name)
         self.patch_size = self.model.config.patch_size
         self.dim = self.model.config.hidden_size
         # CLS + register tokens come before the patch tokens
+        self.norm = getattr(self.model, 'norm', None) or self.model.layernorm  # DINOv3: norm, DINOv2: layernorm
         self.num_prefix_tokens = 1 + getattr(self.model.config, 'num_register_tokens', 0)
         self.layers = layers
 
@@ -105,5 +106,5 @@ class Encoder(nn.Module):
         """ x.shape: bs, 3, H, W -> bs, num_patches, dim (CLS and register tokens dropped) """
         # hidden_states[0] is the patch embedding, hidden_states[i] the output of block i
         hidden_states = self.model(pixel_values=x, output_hidden_states=True).hidden_states
-        feats = [self.model.norm(hidden_states[i][:, self.num_prefix_tokens:]) for i in self.layers]
+        feats = [self.norm(hidden_states[i][:, self.num_prefix_tokens:]) for i in self.layers]
         return torch.stack(feats, dim=0).mean(dim=0)

@@ -2,7 +2,7 @@ lea#!/bin/bash
 
 set -e
 
-ENV_NAME="gssl"
+ENV_NAME="temporal"
 PYTHON_VERSION="3.10"
 
 echo "Creating conda environment: ${ENV_NAME}..."

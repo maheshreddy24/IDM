@@ -1,8 +1,8 @@
-# IDM + flow-matching world model on the toy collision videos (single GPU).
-# Run: python train.py configs/training_toy_data.yaml
+# IDM + flow-matching world model on the parabola videos (single GPU).
+# Run: python train.py configs/training_parabola.yaml
 
 data:
-  path: dataset/collision_30K.hdf5   # 29 shards, 26066 clips, 32 frames of 256x256 at 10 fps
+  path: dataset/parabola_300K.hdf5  # 300 shards, 300000 clips, 32 frames of 256x256 at 10 fps (one ball)
   frame_gap: 4             # x_n is frame_gap frames after x_{n-1} (0.4 s)
   image_size: 224          # 224 / 14 -> 16 x 16 DINOv2 patch grid
   val_clips: 1000          # last clips of the file are held out for evaluation
@@ -43,9 +43,9 @@ train:
   seed: 0
 
 log:
-  out_dir: runs/toy
+  out_dir: runs/parabola
   log_every: 100
   eval_every: 2500
   eval_batches: 10
   save_every: 5000
-  resume: null             # path to a checkpoint, e.g. runs/toy/last.pt
+  resume: null             # path to a checkpoint, e.g. runs/parabola/last.pt

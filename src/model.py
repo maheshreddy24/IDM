@@ -51,12 +51,13 @@ class LatentActionWorldModel(nn.Module):
             'loss_flow': loss_flow.detach(),
             'loss_kl': action['kl'].detach(),
             'action_std': action['mu'].detach().float().std(dim=0).mean(),  # collapse check: ~0 means one action for everything
+            'kl_active_dims': (action['kl_per_dim'].detach() > 0.01).sum(),  # code dims carrying information (KL > 0.01 nats)
         }
 
     @torch.no_grad()
     def infer_action(self, pair):
-        """ bs, 2, N, C raw features -> a_n (mu), bs, 1, latent_dim """
-        return self.idm(self.normalize(pair))['mu']
+        """ bs, 2, N, C raw features -> a_n, the world model's input at the mean code, bs, 1, latent_dim """
+        return self.idm(self.normalize(pair))['z_mean']
 
     @torch.no_grad()
     def predict(self, context, action, num_steps=50):

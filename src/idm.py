@@ -53,22 +53,27 @@ class CrossAttnBlock(nn.Module):
 
 class VAEBottleneck(nn.Module):
     """ Continuous bottleneck on the latent action: LN -> (mu, logvar), sample z = mu + sigma * eps while
-    training, z = mu at eval. Returns the KL to N(0, I); weight it (LaWAM: beta = 5e-5) in the loss """
-    def __init__(self, dim, clamp_logvar=10.0):
+    training, z = mu at eval. Returns the KL to N(0, I); weight it (LaWAM: beta = 5e-5) in the loss.
+    With action_dim set, mu / logvar are down-projected to action_dim (a hard cap on how much the action can carry)
+    and z is projected back up to dim for the world model; action_dim=None keeps them at dim (no projection) """
+    def __init__(self, dim, action_dim=None, clamp_logvar=10.0):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
-        self.mu = nn.Linear(dim, dim)
-        self.logvar = nn.Linear(dim, dim)
+        self.mu = nn.Linear(dim, action_dim or dim)
+        self.logvar = nn.Linear(dim, action_dim or dim)
+        self.up = nn.Linear(action_dim, dim) if action_dim else nn.Identity()
         self.clamp_logvar = clamp_logvar
 
     def forward(self, x):
-        """ x: bs, Q, dim -> z, mu, logvar: bs, 1, dim (queries are averaged); kl: scalar """
+        """ x: bs, Q, dim -> dict with z (sampled while training) and z_mean: bs, 1, dim, the world model's input
+        (queries are averaged); mu, logvar: bs, 1, action_dim; kl: scalar; kl_per_dim: action_dim (batch mean) """
         h = self.norm(x.mean(dim=1, keepdim=True))
         mu = self.mu(h)
         logvar = self.logvar(h).clamp(-self.clamp_logvar, self.clamp_logvar)
         z = mu + torch.randn_like(mu) * (0.5 * logvar).exp() if self.training else mu
-        kl = 0.5 * (mu.pow(2) + logvar.exp() - 1.0 - logvar).sum(dim=-1).mean()
-        return z, mu, logvar, kl
+        kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - 1.0 - logvar).mean(dim=(0, 1))
+        return {'z': self.up(z), 'z_mean': self.up(mu), 'mu': mu, 'logvar': logvar,
+                'kl': kl_per_dim.sum(), 'kl_per_dim': kl_per_dim}
 
 
 class IDM(nn.Module):
@@ -77,9 +82,10 @@ class IDM(nn.Module):
     features (bs, 2, N, input_dim) -> proj -> + 3D sin-cos pos -> flatten (bs, 2N, emb_dim)
     learned queries cross-attend to the 2N patch tokens once, are appended, then `num_layers` masked
     self-attention blocks run over [patches, queries]; the query outputs -> out_proj -> VAE -> z (bs, 1, latent_dim)
+    (through an action_dim-wide code if action_dim is set)
     """
     def __init__(self, input_dim=1024, emb_dim=1024, num_layers=24, num_heads=16, ffn_ratio=4,
-                 latent_dim=256, grid_size=(16, 16), num_queries=1):
+                 latent_dim=256, grid_size=(16, 16), num_queries=1, action_dim=None):
         super().__init__()
         gh, gw = grid_size
         num_patches = 2 * gh * gw
@@ -92,10 +98,10 @@ class IDM(nn.Module):
         self.register_buffer('mask', modal_mask(num_patches, num_queries), persistent=False)
 
         self.out_proj = nn.Linear(emb_dim, latent_dim)
-        self.bottleneck = VAEBottleneck(latent_dim)
+        self.bottleneck = VAEBottleneck(latent_dim, action_dim)
 
     def forward(self, features):
-        """ features: bs, 2, N, input_dim -> dict with z, mu, logvar (bs, 1, latent_dim) and kl (scalar) """
+        """ features: bs, 2, N, input_dim -> the bottleneck's dict (z, z_mean: bs, 1, latent_dim; mu, logvar, kl, kl_per_dim) """
         bs = features.shape[0]
         # bs, 2, N, input_dim -> bs, 2N, emb_dim
         tokens = self.proj(features).flatten(1, 2) + self.pos_embed
@@ -104,5 +110,4 @@ class IDM(nn.Module):
         num_queries = queries.shape[1]
         out = self.model(torch.cat([tokens, queries], dim=1), mask=self.mask)  # bs, 2N + Q, emb_dim
 
-        z, mu, logvar, kl = self.bottleneck(self.out_proj(out[:, -num_queries:]))
-        return {'z': z, 'mu': mu, 'logvar': logvar, 'kl': kl}
+        return self.bottleneck(self.out_proj(out[:, -num_queries:]))
