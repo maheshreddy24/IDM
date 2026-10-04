@@ -1,0 +1,52 @@
+data:
+  path: dataset/parabola_300K.hdf5
+  frame_gap: 4
+  image_size: 224
+  val_clips: 1000
+  num_workers: 8
+backbone:
+  name: facebook/dinov2-large
+  layers:
+  - 6
+  - 12
+  - 18
+  - 24
+idm:
+  emb_dim: 768
+  num_layers: 12
+  num_heads: 12
+  ffn_ratio: 3
+  num_queries: 1
+  latent_dim: 256
+  action_dim: 32
+  kl_weight: 5.0e-05
+world_model:
+  hidden_size:
+  - 256
+  - 1024
+  depth:
+  - 2
+  - 2
+  num_heads:
+  - 8
+  - 16
+  mlp_ratio: 4.0
+flow:
+  time_shift: 3.0
+  sample_steps: 50
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 2000
+  max_steps: 50000
+  grad_clip: 1.0
+  stats_batches: 50
+  seed: 0
+log:
+  out_dir: runs/parabola
+  log_every: 100
+  eval_every: 2500
+  eval_batches: 10
+  save_every: 5000
+  resume: null

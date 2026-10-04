@@ -2,7 +2,9 @@
 
 Layout: shards (groups '00000', '00001', ...) of clips; shard sizes may differ (collision: 29 shards, 26066 clips). Per clip
   video_streams/<shard>[i]     mp4 bytes, 32 frames of 256 x 256 RGB at 10 fps
-  position_streams/<shard>[i]  32, 2, 2 ball centres per frame in world units, (left, right) ball x (x, y) (collision only)
+  position_streams/<shard>[i]  32, 2, 2 ball centres per frame in world units, (left, right) ball x (x, y) (collision);
+                               32, 2 (x, y) for the one ball of parabola
+  init_streams/<shard>[i]      2: (radius, vx) in world units (parabola; the 10 x 10 world fills the frame, y up)
 Each item is one random frame pair (x_{n-1}, x_n) = (frame n, frame n + frame_gap) of one clip.
 """
 import io
@@ -57,5 +59,7 @@ class VideoPairDataset(Dataset):
             frames = F.interpolate(frames, size=(self.image_size, self.image_size), mode='bilinear', antialias=True)
         item = {'frames': (frames - IMAGENET_MEAN) / IMAGENET_STD}
         if 'position_streams' in self.file:
-            item['positions'] = torch.from_numpy(self.file['position_streams'][shard][i][frame_idx]).float()  # T, 2, 2
+            item['positions'] = torch.from_numpy(self.file['position_streams'][shard][i][frame_idx]).float()  # T, 2, 2 (parabola: T, 2)
+        if 'init_streams' in self.file:
+            item['init'] = torch.from_numpy(self.file['init_streams'][shard][i]).float()  # parabola: (radius, vx), world units
         return item

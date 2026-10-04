@@ -1,7 +1,7 @@
 /Flow-World-Models
 /LaWAM
 /datasets
-/runs
+*.pt
 __pycache__/
 
 *.hdf5

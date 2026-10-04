@@ -56,29 +56,37 @@ def fit_ridge(X, Y, ratios=(1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100), chunk=16384):
     """ Linear probe Y ~ X W + b by ridge regression. X: N, D features (float16 is fine, N << D, e.g. flattened patch
     tokens); Y: N, K targets. Solved in the dual: alpha = (G + lam I)^-1 Yc with G = Xc Xc^T, W = Xc^T alpha, so only
     N x N is ever inverted and X is read in D-chunks. lam = ratio * mean eigenvalue of G, ratio picked by the exact
-    leave-one-out error (from one eigendecomposition of G).
+    leave-one-out error (from one eigendecomposition of G). With N > D (low-dim X) it is solved in the primal instead.
     -> {'W': D, K, 'b': K, 'ratio', 'loo_mse'}; predict with ridge_predict """
     N, D = X.shape
     mu = torch.cat([X[:, j:j + chunk].float().mean(0) for j in range(0, D, chunk)])
-    G = torch.zeros(N, N, dtype=torch.float64, device=X.device)
-    for j in range(0, D, chunk):
-        xc = X[:, j:j + chunk].float() - mu[j:j + chunk]
-        G += (xc @ xc.T).double()
     y_mu = Y.mean(0)
     Yc = (Y - y_mu).double()
-    evals, U = torch.linalg.eigh(G)
-    evals = evals.clamp_min(0)
+    if N > D:  # low-dim X (e.g. a latent action): thin SVD Xc = U S V^T, the hat matrix is U diag(shrink) U^T as below
+        U, s, Vh = torch.linalg.svd((X.float() - mu).double(), full_matrices=False)
+        evals = s ** 2
+    else:
+        G = torch.zeros(N, N, dtype=torch.float64, device=X.device)
+        for j in range(0, D, chunk):
+            xc = X[:, j:j + chunk].float() - mu[j:j + chunk]
+            G += (xc @ xc.T).double()
+        evals, U = torch.linalg.eigh(G)
+        evals = evals.clamp_min(0)
+    scale = evals.sum() / N  # mean eigenvalue of G in both cases
     UtY = U.T @ Yc
     best = None
     for ratio in ratios:
-        shrink = evals / (evals + ratio * evals.mean())  # eigenvalues of the hat matrix H = G (G + lam I)^-1
+        shrink = evals / (evals + ratio * scale)  # eigenvalues of the hat matrix H = G (G + lam I)^-1
         residual = Yc - U @ (shrink[:, None] * UtY)
         h = (U ** 2) @ shrink + 1 / N  # diag of the full hat matrix, including the intercept's 1 / N
         loo = (residual / (1 - h)[:, None]).pow(2).mean().item()  # LOO residual = residual / (1 - H_ii)
         if best is None or loo < best[1]:
             best = (ratio, loo)
-    alpha = (U @ (UtY / (evals + best[0] * evals.mean())[:, None])).float()  # N, K
-    W = torch.cat([(X[:, j:j + chunk].float() - mu[j:j + chunk]).T @ alpha for j in range(0, D, chunk)])  # D, K
+    if N > D:
+        W = (Vh.T @ ((s / (evals + best[0] * scale))[:, None] * UtY)).float()  # D, K
+    else:
+        alpha = (U @ (UtY / (evals + best[0] * scale)[:, None])).float()  # N, K
+        W = torch.cat([(X[:, j:j + chunk].float() - mu[j:j + chunk]).T @ alpha for j in range(0, D, chunk)])  # D, K
     return {'W': W, 'b': y_mu.float() - mu @ W, 'ratio': best[0], 'loo_mse': best[1]}
 
 

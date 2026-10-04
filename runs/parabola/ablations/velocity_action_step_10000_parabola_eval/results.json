@@ -1,0 +1,23 @@
+{
+ "checkpoint": "runs/parabola/step_10000.pt",
+ "data": "dataset/parabola_eval.hdf5",
+ "num_train": 2244,
+ "num_eval": 688,
+ "code_r2_from_velocity": 0.22424453496932983,
+ "latent": {
+  "cos": 0.9738889336585999,
+  "cos_ball": 0.8493778109550476
+ },
+ "velocity": {
+  "cos": 0.9736611843109131,
+  "cos_ball": 0.8517961502075195
+ },
+ "mean": {
+  "cos": 0.9706458449363708,
+  "cos_ball": 0.835384726524353
+ },
+ "copy": {
+  "cos": 0.9397140145301819,
+  "cos_ball": 0.5390740036964417
+ }
+}
